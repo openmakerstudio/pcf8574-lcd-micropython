@@ -8,6 +8,8 @@ single-byte I2C transaction, matching real hardware where pulseEnable()
 writes the byte three times (EN low, EN high, EN low).
 """
 
+import time
+
 
 class LCD:
     def __init__(self, bus, addr, num_lines=2, num_columns=16):
@@ -34,12 +36,32 @@ class LCD:
 
     def _cmd(self, value):
         self._send(value, False)
+        if value <= 0x03:
+            # Clear Display / Return Home need ~1.52ms to execute on real
+            # silicon, vs ~37us for every other instruction — without this,
+            # a command issued right after (e.g. move_to()/putstr() in the
+            # same call) can land while the chip is still busy and get lost.
+            time.sleep_ms(5)
 
     def putstr(self, s):
         for ch in s:
             self._send(ord(ch), True)
 
     def begin(self):
+        # Real HD44780 silicon powers up not knowing whether the host will
+        # talk 4-bit or 8-bit — jumping straight to _cmd(0x28) assumes the
+        # controller is already synchronized to 4-bit mode, which is not
+        # guaranteed. This is the datasheet-mandated "initialization by
+        # instruction" handshake (send nibble 0x3 three times, each in its
+        # own EN pulse, then 0x2 to commit to 4-bit mode) that puts the
+        # controller into a known state first. Skipping it works against a
+        # lenient simulator/stub but can leave a real physical LCD blank or
+        # garbled, since real silicon has no such lenience.
+        time.sleep_ms(20)
+        self._write4(0x03, False); time.sleep_ms(5)
+        self._write4(0x03, False); time.sleep_ms(1)
+        self._write4(0x03, False); time.sleep_ms(1)
+        self._write4(0x02, False); time.sleep_ms(1)
         self._cmd(0x28)
         self._cmd(0x0C)
         self._cmd(0x01)
