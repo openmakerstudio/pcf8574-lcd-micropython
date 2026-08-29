@@ -6,6 +6,16 @@ wiring used by virtually every commercial I2C LCD backpack: P0=RS, P1=RW,
 P2=EN, P3=Backlight, P4-P7=D4-D7. Each expander write is its own
 single-byte I2C transaction, matching real hardware where pulseEnable()
 writes the byte three times (EN low, EN high, EN low).
+
+cursor_on()/off() and blink_on()/off() track a persistent _displaycontrol
+bitmask and only ever toggle their own bit before resending -- a real
+HD44780's Display Control instruction covers on/off, cursor, and blink in
+ONE byte, so an earlier version of this file sent a flat absolute value per
+method instead, which silently clobbered whichever of cursor/blink was set
+most recently whenever the OTHER one got toggled next (e.g. blink_on()
+then cursor_on() would leave blink off again). Verified against
+github.com/openmakerstudio/aip31068-lcd-micropython's driver, which shares
+the same underlying HD44780-compatible command set and needed the same fix.
 """
 
 import time
@@ -16,6 +26,7 @@ class LCD:
         self.bus = bus
         self.addr = addr
         self.backlightval = 0x08
+        self._displaycontrol = 0x04  # display on, cursor off, blink off
         self.begin()
 
     def _write(self, data):
@@ -63,7 +74,7 @@ class LCD:
         self._write4(0x03, False); time.sleep_ms(1)
         self._write4(0x02, False); time.sleep_ms(1)
         self._cmd(0x28)
-        self._cmd(0x0C)
+        self._cmd(0x08 | self._displaycontrol)
         self._cmd(0x01)
         self._cmd(0x06)
 
@@ -82,13 +93,17 @@ class LCD:
         self._write(0x00)
 
     def cursor_on(self):
-        self._cmd(0x0E)
+        self._displaycontrol |= 0x02
+        self._cmd(0x08 | self._displaycontrol)
 
     def cursor_off(self):
-        self._cmd(0x0C)
+        self._displaycontrol &= ~0x02
+        self._cmd(0x08 | self._displaycontrol)
 
     def blink_on(self):
-        self._cmd(0x0D)
+        self._displaycontrol |= 0x01
+        self._cmd(0x08 | self._displaycontrol)
 
     def blink_off(self):
-        self._cmd(0x0C)
+        self._displaycontrol &= ~0x01
+        self._cmd(0x08 | self._displaycontrol)
